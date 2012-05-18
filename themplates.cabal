@@ -1,4 +1,4 @@
-Name:                themplate
+Name:                themplates
 Version:             0.0.1
 Synopsis:            Allows upgrading a parser to a parser with splices.
 Description:
@@ -6,24 +6,25 @@ License:             BSD3
 License-file:        LICENSE
 Author:              Michael Sloan
 Maintainer:          Michael Sloan <mgsloan at gmail>
-Homepage:            http://github.com/mgsloan/themplate
+Homepage:            http://github.com/mgsloan/themplates
 Copyright:           Michael Sloan 2012
 Category:            Template Haskell
 Build-type:          Simple
 Stability:           experimental
 Cabal-version:       >=1.6
-Bug-Reports:         http://github.com/mgsloan/themplate
+Bug-Reports:         http://github.com/mgsloan/themplates
 Source-Repository head
   Type: git
-  Location: git://github.com/mgsloan/
+  Location: git://github.com/mgsloan/themplates
 
 Library
   Hs-Source-Dirs:    src
 
-  Exposed-modules:   Text.Themplate
+  Exposed-modules:   Text.Themplates
   Extensions:        RankNTypes
   Build-depends:     base >= 3.0 && < 6,
                      containers,
+                     either,
                      parsec >= 3.0,
                      syb
   Ghc-options:       -Wall

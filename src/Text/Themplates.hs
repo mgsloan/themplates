@@ -1,32 +1,38 @@
 {-# LANGUAGE PatternGuards, ScopedTypeVariables, TupleSections #-}
 
-module Text.Themplates where
+module Text.Themplates
+  ( Chunk
+  , parseSplices, substSplices
+
+  -- * Parsec parsers
+  , spliceParser, curlySplice, thSplice, nestParser, escapeParser, delimParser
+
+  -- * Misc Utilities
+  , generateNames, mapBoth, mapLeft, mapRight
+  ) where
 
 import Control.Applicative        ( (<$>), (<*>) )
 import Control.Monad.Trans.Either ( EitherT )
-import Data.Data                  ( Data )
-import Data.Generics.Aliases      ( extT )
-import Data.Generics.Schemes      ( everywhere )
+import Data.Generics              ( Data, extT, everywhere )
+import Data.List                  ( isPrefixOf, tails )
 import qualified Data.Map as M
 import Data.Maybe                 ( maybeToList )
 import Text.Parsec
-  ( Parsec, try, eof, anyToken, noneOf, char, string, choice, (<|>) )
+  ( Parsec, parse, try, eof, anyToken, noneOf, char, string, choice, (<|>), lookAhead, anyChar, manyTill, getInput, many )
 
-data Chunk t s = Chunk [t] | Splice s
-  deriving Show
+-- | A Chunk is just a synonym for @Either@.  The @Left@ constructor is a
+--   \"Chunk\", the portion of the template that is not a \"Right \",
+--   which is the @Right@ constructor.
+type Chunk c s = Either c s
 
-chunk :: ([t] -> a) -> (s -> a) -> Chunk t s -> a
-chunk f _ (Chunk ts) = f ts
-chunk _ g (Splice s) = g s
-
-substSplices :: forall s t e m r. (Monad m, Data r, Ord r)
+substSplices :: forall t s e m r. (Monad m, Data r, Ord r)
              => (s -> [t])
              -> ([t] -> EitherT e m r)
-             -> (s   -> EitherT e m [(r, r)])
-             -> [Chunk t s]
+             -> (s -> EitherT e m [(r, r)])
+             -> [Chunk [t] s]
              -> EitherT e m r
 substSplices placeholder parser subst xs = do
-  subs <- sequence [subst s | Splice s <- xs]
+  subs <- sequence [subst s | Right s <- xs]
 
   let subs_map = M.fromList $ concat subs
       do_subst :: r -> r
@@ -35,28 +41,76 @@ substSplices placeholder parser subst xs = do
         | otherwise                     = x
 
   parsed <- parser
-          $ concatMap (chunk id placeholder) xs
+          $ concatMap (either id placeholder) xs
 
   return $ everywhere (id `extT` do_subst) parsed
 
 
 -- Utilities for parsing spliced stuff.
 
+parseSplices :: forall t s. Show t
+             => Parsec [t] () s
+             -> [t] 
+             -> Either String [Chunk [t] s]
+parseSplices splice = mapLeft show . parse (spliceParser splice) ""
+
 spliceParser :: forall t s. Show t
              => Parsec [t] () s
-             -> Parsec [t] () [Chunk t s]
+             -> Parsec [t] () [Chunk [t] s]
 spliceParser parse_splice = do
-  s <-  (Splice        <$> parse_splice)
-    <|> (Chunk . (:[]) <$> anyToken)
-    <|> (eof >> return (Chunk []))
+  s <-  (Right         <$> try parse_splice)
+    <|> (Left  . (:[]) <$> anyToken)
+    <|> (eof >> return (Left  []))
   case s of
-    c@(Chunk []) -> return [c]
+    c@(Left  []) -> return [c]
     _ -> do
       rest <- spliceParser parse_splice
       case (s, rest) of
-        (Chunk [c], Chunk acc:rs) -> return $ Chunk (c:acc) : rs
+        (Left  [c], Left  acc:rs) -> return $ Left  (c:acc) : rs
         _ -> return $ s : rest
 
+-- The same splice style as the old ast quoters.
+-- TODO: Make the quasi-quoter configurable to use this.
+thSplice :: Parsec String () (Maybe String, String)
+thSplice = do
+  _ <- try $ string "$("
+  fancySplice (concat <$> nestParser (delimParser '(' ')') 
+                                     [try $ char ')' >> return ""])
+
+-- To be passed as the first parameter to parseSplices or spliceParser.
+curlySplice :: Parsec String () (Maybe String, String)
+curlySplice = do
+  _ <- try $ string "{{" 
+  fancySplice (concat <$> nestParser (delimParser '{' '}') 
+                                     [try $ string "}}" >> return ""])
+
+fancySplice :: Parsec String () s
+            -> Parsec String () (Maybe String, s)
+fancySplice code_parser = do
+  c <- lookAhead anyChar
+  case c of
+    '<' -> do
+      _ <- char '<'
+      splice <- manyTill (escapeParser '\\' [('>', '>'), ('\\', '\\')])
+                         (char '>')
+      code <- code_parser
+      return (Just splice, code)
+    _ ->  do
+      code <- code_parser
+      return (Nothing, code)
+
+{-
+parseList :: Parsec String () (Either String (String, String, String))
+parseList = do
+  input <- getInput
+  (try $ do
+    prefix <- manyTill anyChar (lookAhead ((string "..." >> return ()) 
+                                         <|> eof))
+    string "..."
+    rest <- many (noneOf " ")
+    return $ Right (prefix, rest)
+    ) <|> (many anyChar >> return (Left input))
+-}
 
 nestParser :: forall t r. Show t
            =>  Parsec [t] () (r, Maybe (Parsec [t] () r))
@@ -81,3 +135,24 @@ delimParser :: Char -> Char
 delimParser start end = do
   r <- try (string [start]) <|> ((:[]) <$> noneOf [end])
   return (r, if r == [start] then Just (try $ string [end]) else Nothing)
+
+generateNames :: String -> String -> [String]
+generateNames prefix input
+  = [ prefix ++ s
+    | s <- map show [(0::Int)..]
+    , all (not . isPrefixOf s) avoids
+    ]
+ where
+  avoids = [ drop (length prefix) t
+           | t <- tails input
+           , prefix `isPrefixOf` t
+           ]
+
+mapBoth :: (a -> c) -> (b -> d) -> Either a b -> Either c d
+mapBoth f g = either (Left . f) (Right . g)
+
+mapLeft :: (a -> c) -> Either a b -> Either c b
+mapLeft  f = mapBoth f id
+
+mapRight :: (b -> d) -> Either a b -> Either a d
+mapRight f = mapBoth id f

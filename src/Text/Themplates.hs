@@ -8,7 +8,7 @@ module Text.Themplates
   , spliceParser, curlySplice, thSplice, nestParser, escapeParser, delimParser
 
   -- * Misc Utilities
-  , generateNames, mapBoth, mapLeft, mapRight
+  , generateNames
   ) where
 
 import Control.Applicative        ( (<$>), (<*>) )
@@ -18,11 +18,9 @@ import Data.List                  ( isPrefixOf, tails )
 import qualified Data.Map as M
 import Data.Maybe                 ( maybeToList )
 import Text.Parsec
-  ( Parsec, parse, try, eof, anyToken, noneOf, char, string, choice, (<|>), lookAhead, anyChar, manyTill, getInput, many )
+  ( Parsec, parse, try, eof, anyToken, noneOf, char, string, choice, (<|>)
+  , lookAhead, anyChar, manyTill )
 
--- | A Chunk is just a synonym for @Either@.  The @Left@ constructor is a
---   \"Chunk\", the portion of the template that is not a \"Right \",
---   which is the @Right@ constructor.
 type Chunk c s = Either c s
 
 substSplices :: forall t s e m r. (Monad m, Data r, Ord r)
@@ -45,14 +43,14 @@ substSplices placeholder parser subst xs = do
 
   return $ everywhere (id `extT` do_subst) parsed
 
-
 -- Utilities for parsing spliced stuff.
 
 parseSplices :: forall t s. Show t
              => Parsec [t] () s
-             -> [t] 
+             -> [t]
              -> Either String [Chunk [t] s]
-parseSplices splice = mapLeft show . parse (spliceParser splice) ""
+parseSplices splice =
+  either (Left . show) Right . parse (spliceParser splice) ""
 
 spliceParser :: forall t s. Show t
              => Parsec [t] () s
@@ -74,14 +72,14 @@ spliceParser parse_splice = do
 thSplice :: Parsec String () (Maybe String, String)
 thSplice = do
   _ <- try $ string "$("
-  fancySplice (concat <$> nestParser (delimParser '(' ')') 
+  fancySplice (concat <$> nestParser (delimParser '(' ')')
                                      [try $ char ')' >> return ""])
 
 -- To be passed as the first parameter to parseSplices or spliceParser.
 curlySplice :: Parsec String () (Maybe String, String)
 curlySplice = do
-  _ <- try $ string "{{" 
-  fancySplice (concat <$> nestParser (delimParser '{' '}') 
+  _ <- try $ string "{{"
+  fancySplice (concat <$> nestParser (delimParser '{' '}')
                                      [try $ string "}}" >> return ""])
 
 fancySplice :: Parsec String () s
@@ -91,8 +89,9 @@ fancySplice code_parser = do
   case c of
     '<' -> do
       _ <- char '<'
-      splice <- manyTill (escapeParser '\\' [('>', '>'), ('\\', '\\')])
-                         (char '>')
+      splice <- manyTill
+        (escapeParser '\\' [('>', '>'), ('\\', '\\')])
+        (char '>')
       code <- code_parser
       return (Just splice, code)
     _ ->  do
@@ -104,7 +103,7 @@ parseList :: Parsec String () (Either String (String, String, String))
 parseList = do
   input <- getInput
   (try $ do
-    prefix <- manyTill anyChar (lookAhead ((string "..." >> return ()) 
+    prefix <- manyTill anyChar (lookAhead ((string "..." >> return ())
                                          <|> eof))
     string "..."
     rest <- many (noneOf " ")
@@ -112,23 +111,23 @@ parseList = do
     ) <|> (many anyChar >> return (Left input))
 -}
 
-nestParser :: forall t r. Show t
-           =>  Parsec [t] () (r, Maybe (Parsec [t] () r))
-           -> [Parsec [t] () r]
-           ->  Parsec [t] () [r]
-nestParser open closers = case closers of 
+nestParser
+  :: forall t r. Show t
+  =>  Parsec [t] () (r, Maybe (Parsec [t] () r))
+  -> [Parsec [t] () r]
+  ->  Parsec [t] () [r]
+nestParser open closers = case closers of
   [] -> return []
-  (close:cs) -> ((:) <$> close <*> nestParser open cs) 
-            <|> (open >>= \(x, c) -> (x:) <$> nestParser open (maybeToList c ++ closers))
-            <|> return []
-
+  (close:cs)
+    -> ((:) <$> close <*> nestParser open cs)
+   <|> (open >>= \(x, c) -> (x:) <$> nestParser open (maybeToList c ++ closers))
+   <|> return []
 
 escapeParser :: Char -> [(Char, Char)] -> Parsec String () Char
-escapeParser c xs
-  = (char c >> choice (map escape xs)) <|> noneOf [c]
- where
-  escape (code, repl) = char code >> return repl
-
+escapeParser c xs =
+    (char c >> choice (map escape xs)) <|> noneOf [c]
+  where
+    escape (code, repl) = char code >> return repl
 
 delimParser :: Char -> Char
             -> Parsec String () (String, Maybe (Parsec String () String))
@@ -137,22 +136,13 @@ delimParser start end = do
   return (r, if r == [start] then Just (try $ string [end]) else Nothing)
 
 generateNames :: String -> String -> [String]
-generateNames prefix input
-  = [ prefix ++ s
+generateNames prefix input =
+    [ prefix ++ s
     | s <- map show [(0::Int)..]
     , all (not . isPrefixOf s) avoids
     ]
- where
-  avoids = [ drop (length prefix) t
-           | t <- tails input
-           , prefix `isPrefixOf` t
-           ]
-
-mapBoth :: (a -> c) -> (b -> d) -> Either a b -> Either c d
-mapBoth f g = either (Left . f) (Right . g)
-
-mapLeft :: (a -> c) -> Either a b -> Either c b
-mapLeft  f = mapBoth f id
-
-mapRight :: (b -> d) -> Either a b -> Either a d
-mapRight f = mapBoth id f
+  where
+    avoids = [ drop (length prefix) t
+             | t <- tails input
+             , prefix `isPrefixOf` t
+             ]

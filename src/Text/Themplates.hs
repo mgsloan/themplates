@@ -8,13 +8,14 @@ module Text.Themplates
   , spliceParser, curlySplice, thSplice, nestParser, escapeParser, delimParser
 
   -- * Misc Utilities
-  , generateNames
+  , dedentQuote, generateNames
   ) where
 
 import Control.Applicative        ( (<$>), (<*>) )
 import Control.Monad.Trans.Either ( EitherT )
 import Data.Generics              ( Data, extT, everywhere )
-import Data.List                  ( isPrefixOf, tails )
+import Data.Char                  ( isSpace )
+import Data.List                  ( isPrefixOf, stripPrefix, tails )
 import qualified Data.Map as M
 import Data.Maybe                 ( maybeToList )
 import Text.Parsec
@@ -134,6 +135,34 @@ delimParser :: Char -> Char
 delimParser start end = do
   r <- try (string [start]) <|> ((:[]) <$> noneOf [end])
   return (r, if r == [start] then Just (try $ string [end]) else Nothing)
+
+-- | Dedents a qq based on the indentation of the first line that has content.
+--   As a safety measure, if any of the lines have content but not the same
+--   indentation, then an error is yielded.
+dedentQuote :: String -> String -> Either String String
+dedentQuote qq code =
+    case lines code of
+      (l0:l1:ls)
+        | all isSpace l0 -> dedent $ zip ixs (l1:ls)
+        | otherwise -> dedent $ zip ixs (l0':l1:ls)
+          where
+            l0' = replicate (length qq + 2) ' ' ++ l0
+      _ -> Right $ dropWhile isSpace code
+  where
+    ixs :: [Int]
+    ixs = [1..]
+    dedent [] = Right ""
+    dedent ls@((_, l):_) = unlines <$> mapM removePrefix ls
+      where
+        prefix = takeWhile isSpace l
+        removePrefix (ix, x)
+          | all isSpace x = Right x
+          | Just x' <- stripPrefix prefix x = Right x'
+          | otherwise = Left $ unwords
+            [ "While dedenting a quote, line "
+            , show ix
+            , " had less indentation, or used tabs."
+            ]
 
 generateNames :: String -> String -> [String]
 generateNames prefix input =

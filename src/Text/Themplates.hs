@@ -13,8 +13,8 @@ module Text.Themplates
 
 import Control.Applicative        ( (<$>), (<*>) )
 import Control.Monad.Trans.Either ( EitherT )
-import Data.Generics              ( Data, extT, everywhere )
 import Data.Char                  ( isSpace )
+import Data.Generics              ( Data, extT, everywhere' )
 import Data.List                  ( isPrefixOf, stripPrefix, tails )
 import qualified Data.Map as M
 import Data.Maybe                 ( maybeToList )
@@ -42,7 +42,7 @@ substSplices placeholder parser subst xs = do
   parsed <- parser
           $ concatMap (either id placeholder) xs
 
-  return $ everywhere (id `extT` do_subst) parsed
+  return $ everywhere' (id `extT` do_subst) parsed
 
 -- Utilities for parsing spliced stuff.
 
